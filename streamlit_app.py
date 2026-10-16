@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="AlgoDesk • Binance Options & Futures Portfolio",
+    page_title="AlgoDesk • Binance Live Options & Futures Portfolio",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -43,17 +43,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH FEE-OPTIMIZED PROFIT TARGETS
+# 2. GLOBAL ENGINE WITH LIVE BINANCE API EXECUTION
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
     class SharedEngine:
         def __init__(self):
-            self.crypto_capital = 50000.0
-            self.lot_size = 5.0
+            self.crypto_capital = 700.0  # Set to $700 live capital
+            self.lot_size = 1.0            # Reduced safe lot size for $700
             self.trade_mode = "OPTIONS"
-            self.paper_trading = True
-            self.last_status = "Fee-Optimized Multi-Asset Engine Active (High R:R Mode)"
+            self.paper_trading = True      # Toggle to False for Live Trading
+            self.api_key = ""
+            self.api_secret = ""
+            self.last_status = "Live Ready ($700 Capital Configured)"
             self.last_tick_time = 0.0
             self.trade_book = []
 
@@ -82,6 +84,42 @@ def get_global_engine():
             gross = diff * qty
             fee = max(0.02, (entry + exit_p) * qty * 0.00045)
             return round(gross, 2), round(fee, 2), round(gross - fee, 2)
+
+        def place_binance_order(self, pair, qty, side="BUY", precision=2, reduce_only=False):
+            if self.paper_trading or not self.api_key or not self.api_secret:
+                return True, "PAPER_OK"
+            try:
+                formatted_qty = f"{qty:.{precision}f}"
+                timestamp = int(time.time() * 1000)
+                params = {
+                    "symbol": pair,
+                    "side": side.upper(),
+                    "type": "MARKET",
+                    "quantity": formatted_qty,
+                    "timestamp": timestamp,
+                    "recvWindow": 5000
+                }
+                if reduce_only:
+                    params["reduceOnly"] = "true"
+
+                query_string = urllib.parse.urlencode(params)
+                signature = hmac.new(
+                    self.api_secret.encode("utf-8"),
+                    query_string.encode("utf-8"),
+                    hashlib.sha256
+                ).hexdigest()
+
+                full_url = f"https://fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
+                headers = {
+                    "X-MBX-APIKEY": self.api_key,
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+                req = urllib.request.Request(full_url, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    return True, str(res_data.get("orderId", "OK"))
+            except Exception as e:
+                return False, str(e)
 
         def fetch_prices(self):
             prices = {}
@@ -153,7 +191,11 @@ def get_global_engine():
                         w["peak_net"] = -999999.0
                         w["be_armed"] = False
                         w["entry_time"] = datetime.datetime.now().strftime("%H:%M:%S")
-                        w["in_trade"] = True
+
+                        side = "BUY" if w["direction"] in ("CALL", "LONG") else "SELL"
+                        ok, _ = self.place_binance_order(w["pair"], w["qty"], side=side, precision=w["prec"], reduce_only=False)
+                        if ok:
+                            w["in_trade"] = True
                 else:
                     w["curr"] = spot
                     is_bull = w["direction"] in ("CALL", "LONG")
@@ -162,7 +204,6 @@ def get_global_engine():
                     if net > w["peak_net"]:
                         w["peak_net"] = net
 
-                    # FEE-AWARE TARGETS: Min profit lock must be at least 3.0x fee to overcome exchange taker costs
                     scale_factor = effective_lot = max(0.2, self.lot_size) * capital_multiplier
                     min_lock = round(max(1.50 * scale_factor, fee * 3.0), 2)
                     trail_start = round(min_lock * 1.8, 2)
@@ -186,6 +227,8 @@ def get_global_engine():
                         reason = "🛑 Stop Loss"
 
                     if reason:
+                        close_side = "SELL" if is_bull else "BUY"
+                        self.place_binance_order(w["pair"], w["qty"], side=close_side, precision=w["prec"], reduce_only=True)
                         w["in_trade"] = False
                         w["unrealized"] = 0.0
                         w["trades"] += 1
@@ -210,16 +253,25 @@ engine.step_all()
 is_client = st.query_params.get("client", "0") == "1"
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS
+# 3. SIDEBAR CONTROLS (LIVE API CONFIGURATION)
 # ==============================================================================
 with st.sidebar:
     st.markdown("## ⚡ AlgoDesk SaaS")
-    st.caption("Fee-Optimized Binance Engine")
+    st.caption("Live Binance Execution Engine")
     if not is_client:
-        st.subheader("⚙️ Admin Settings")
-        engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=500.0, value=float(engine.crypto_capital), step=1000.0)
-        engine.lot_size = st.number_input("Lot Size Multiplier (Up to 50.0x)", min_value=0.2, max_value=50.0, value=float(engine.lot_size), step=0.5)
+        st.subheader("⚙️ Live & Capital Settings")
+        engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=50.0, value=float(engine.crypto_capital), step=50.0)
+        engine.lot_size = st.number_input("Lot Size Multiplier (Safe for $700 = 1.0x)", min_value=0.2, max_value=10.0, value=float(engine.lot_size), step=0.2)
         engine.trade_mode = st.selectbox("Contract Mode", ["OPTIONS", "FUTURES"], index=0 if engine.trade_mode=="OPTIONS" else 1)
+        
+        paper_choice = st.selectbox("Execution Mode", ["📝 Paper Trading (0 Risk)", "🚀 LIVE Binance API Execution"], index=0 if engine.paper_trading else 1)
+        engine.paper_trading = (paper_choice.startswith("📝"))
+
+        if not engine.paper_trading:
+            st.warning("⚠️ **Live Mode Active:** Real orders will be sent to Binance Futures!")
+            engine.api_key = st.text_input("Binance API Key", value=engine.api_key, type="password")
+            engine.api_secret = st.text_input("Binance API Secret", value=engine.api_secret, type="password")
+
         if st.button("🔄 Reset Day P&L", use_container_width=True):
             engine.trade_book.clear()
             for w in engine.workers:
