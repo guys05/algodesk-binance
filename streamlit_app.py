@@ -43,17 +43,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH SCALABLE CAPITAL & POSITIVE R:R
+# 2. GLOBAL ENGINE WITH FEE-OPTIMIZED PROFIT TARGETS
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
     class SharedEngine:
         def __init__(self):
-            self.crypto_capital = 50000.0  # Default to user's $50k scale
-            self.lot_size = 5.0            # Scaled default for larger capital
+            self.crypto_capital = 50000.0
+            self.lot_size = 5.0
             self.trade_mode = "OPTIONS"
             self.paper_trading = True
-            self.last_status = "High-Expectancy Multi-Asset Engine Active (Capital Scaled)"
+            self.last_status = "Fee-Optimized Multi-Asset Engine Active (High R:R Mode)"
             self.last_tick_time = 0.0
             self.trade_book = []
 
@@ -103,7 +103,6 @@ def get_global_engine():
             self.last_tick_time = now
             live_map = self.fetch_prices()
 
-            # Dynamic capital scaling factor based on $500 baseline
             capital_multiplier = max(1.0, self.crypto_capital / 500.0)
 
             for w in self.workers:
@@ -163,14 +162,14 @@ def get_global_engine():
                     if net > w["peak_net"]:
                         w["peak_net"] = net
 
-                    # Scaled thresholds so wins significantly outweigh losses
+                    # FEE-AWARE TARGETS: Min profit lock must be at least 3.0x fee to overcome exchange taker costs
                     scale_factor = effective_lot = max(0.2, self.lot_size) * capital_multiplier
-                    min_lock = round(max(0.80 * scale_factor, fee * 1.6), 2)
+                    min_lock = round(max(1.50 * scale_factor, fee * 3.0), 2)
                     trail_start = round(min_lock * 1.8, 2)
-                    target = round(min_lock * 3.2, 2)
-                    max_loss = -round(max(0.60 * scale_factor, fee * 1.2), 2)
+                    target = round(min_lock * 3.5, 2)
+                    max_loss = -round(max(0.50 * scale_factor, fee * 1.0), 2)
 
-                    if net >= (min_lock * 0.50):
+                    if net >= (min_lock * 0.40):
                         w["be_armed"] = True
 
                     reason = None
@@ -180,7 +179,7 @@ def get_global_engine():
                         reason = "🏄 Profit Trailed"
                     elif w["peak_net"] >= (min_lock * 1.3) and net >= min_lock and net <= (w["peak_net"] * 0.90):
                         reason = "🔒 Profit Locked"
-                    elif w["be_armed"] and net <= max(0.15, min_lock * 0.15):
+                    elif w["be_armed"] and net <= max(0.20, min_lock * 0.15):
                         reason = "🛡️ Break-Even Shield"
                     elif net <= max_loss:
                         w["cooldown"] = 4
@@ -211,11 +210,11 @@ engine.step_all()
 is_client = st.query_params.get("client", "0") == "1"
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS (UNLOCKED MULTIPLIER UP TO 50.0x)
+# 3. SIDEBAR CONTROLS
 # ==============================================================================
 with st.sidebar:
     st.markdown("## ⚡ AlgoDesk SaaS")
-    st.caption("High-Expectancy Binance Engine")
+    st.caption("Fee-Optimized Binance Engine")
     if not is_client:
         st.subheader("⚙️ Admin Settings")
         engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=500.0, value=float(engine.crypto_capital), step=1000.0)
@@ -252,7 +251,7 @@ def render_live_dashboard():
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.markdown(f'<div class="saas-card"><div class="kpi-title">Active Capital</div><div class="kpi-value">${engine.crypto_capital:,.2f}</div><div class="kpi-sub">Binance USDⓈ-M / Options</div></div>', unsafe_allow_html=True)
     r_col = "#10b981" if total_realized >= 0 else "#ef4444"
-    k2.markdown(f'<div class="saas-card"><div class="kpi-title">Net Realized P&L</div><div class="kpi-value" style="color:{r_col};">{total_realized:+.2f}$</div><div class="kpi-sub">After Taker Fees</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="saas-card"><div class="kpi-title">Net Realized P&L</div><div class="kpi-value" style="color:{r_col};">{total_realized:+.2f}$</div><div class="kpi-sub">Fee-Optimized</div></div>', unsafe_allow_html=True)
     u_col = "#f59e0b" if total_unrealized >= 0 else "#ef4444"
     k3.markdown(f'<div class="saas-card"><div class="kpi-title">Open Unrealized</div><div class="kpi-value" style="color:{u_col};">{total_unrealized:+.2f}$</div><div class="kpi-sub">{open_count} Active Contracts</div></div>', unsafe_allow_html=True)
     k4.markdown(f'<div class="saas-card"><div class="kpi-title">Total Net ROI %</div><div class="kpi-value" style="color:{r_col};">{roi_pct:+.2f}%</div><div class="kpi-sub">Realized + Open</div></div>', unsafe_allow_html=True)
@@ -301,7 +300,7 @@ def render_live_dashboard():
         else:
             st.caption("Scanning 6 crypto pairs for EMA + VWAP momentum alignment...")
 
-        st.markdown("##### 📑 Completed Trades Today")
+        st.markdown("##### 📑 Completed Trades Today (Fee-Optimized)")
         if engine.trade_book:
             df_book = pd.DataFrame(engine.trade_book[:30])
             st.dataframe(df_book, use_container_width=True, hide_index=True)
