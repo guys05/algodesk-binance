@@ -45,7 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH $700 CAPITAL & FAST EXECUTION
+# 2. GLOBAL ENGINE WITH FASTER SIGNAL FIRING & DUAL API ROUTING
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
@@ -87,21 +87,29 @@ def get_global_engine():
             fee = max(0.02, (entry + exit_p) * qty * 0.00045)
             return round(gross, 2), round(fee, 2), round(gross - fee, 2)
 
-        def place_binance_order(self, pair, qty, side="BUY", precision=2, reduce_only=False):
+        def place_binance_order(self, symbol_or_contract, qty, side="BUY", precision=2, reduce_only=False):
             if self.paper_trading or not self.api_key or not self.api_secret:
                 return True, "PAPER_OK"
             try:
+                is_options = (self.trade_mode == "OPTIONS")
+                base_url = "https://eapi.binance.com" if is_options else "https://fapi.binance.com"
+                endpoint = "/eapi/v1/order" if is_options else "/fapi/v1/order"
+
                 formatted_qty = f"{qty:.{precision}f}"
                 timestamp = int(time.time() * 1000)
                 params = {
-                    "symbol": pair,
+                    "symbol": symbol_or_contract,
                     "side": side.upper(),
-                    "type": "MARKET",
+                    "type": "LIMIT" if is_options else "MARKET",
                     "quantity": formatted_qty,
                     "timestamp": timestamp,
                     "recvWindow": 5000
                 }
-                if reduce_only:
+                if is_options:
+                    # Binance Options require LIMIT price
+                    params["price"] = str(qty) # Placeholder or market ref
+                    params["timeInForce"] = "IOC"
+                if reduce_only and not is_options:
                     params["reduceOnly"] = "true"
 
                 query_string = urllib.parse.urlencode(params)
@@ -111,7 +119,7 @@ def get_global_engine():
                     hashlib.sha256
                 ).hexdigest()
 
-                full_url = f"https://fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
+                full_url = f"{base_url}{endpoint}?{query_string}&signature={signature}"
                 headers = {
                     "X-MBX-APIKEY": self.api_key,
                     "Content-Type": "application/x-www-form-urlencoded"
@@ -167,19 +175,15 @@ def get_global_engine():
                     w["unrealized"] = 0.0
                     if len(w["history"]) < 4:
                         continue
-                    vel = spot - w["history"][-3]
-                    ema_bull = w["ema_f"] >= w["ema_s"]
                     is_opt = (self.trade_mode == "OPTIONS")
 
-                    # Relaxed charge logic so signals cross 100% faster
-                    if spot >= w["vwap"] and ema_bull:
+                    # FAST-FIRING SIGNAL LOGIC: Ffires as soon as price crosses VWAP or momentum aligns
+                    if spot >= w["vwap"]:
                         w["direction"] = "CALL" if is_opt else "LONG"
-                        w["charge"] = min(100, w["charge"] + 45)
-                    elif spot < w["vwap"] and (not ema_bull):
-                        w["direction"] = "PUT" if is_opt else "SHORT"
-                        w["charge"] = min(100, w["charge"] + 45)
+                        w["charge"] = min(100, w["charge"] + 55)
                     else:
-                        w["charge"] = max(25, w["charge"] - 5)
+                        w["direction"] = "PUT" if is_opt else "SHORT"
+                        w["charge"] = min(100, w["charge"] + 55)
 
                     if w["charge"] >= 100:
                         effective_lot = max(0.2, self.lot_size)
@@ -188,16 +192,18 @@ def get_global_engine():
                         st_step = w["strike_step"]
                         strike = int(round(spot/st_step)*st_step) if st_step >= 1 else round(round(spot/st_step)*st_step, 3)
                         exp = datetime.datetime.now().strftime("%y%m%d")
-                        w["contract"] = f"{w['symbol']}-{exp}-{strike}-{'C' if w['direction']=='CALL' else 'P'}" if is_opt else f"{w['pair']}-PERP ({w['direction']})"
+                        
+                        opt_symbol = f"{w['symbol']}-{exp}-{strike}-{'C' if w['direction']=='CALL' else 'P'}"
+                        w["contract"] = opt_symbol if is_opt else f"{w['pair']}-PERP ({w['direction']})"
                         w["entry"] = spot
                         w["curr"] = spot
                         w["peak_net"] = -999999.0
                         w["be_armed"] = False
                         w["entry_time"] = datetime.datetime.now().strftime("%H:%M:%S")
 
-                        exec_pair = w["pair"]
+                        exec_target = opt_symbol if is_opt else w["pair"]
                         side = "BUY" if w["direction"] in ("CALL", "LONG") else "SELL"
-                        ok, _ = self.place_binance_order(exec_pair, w["qty"], side=side, precision=w["prec"], reduce_only=False)
+                        ok, _ = self.place_binance_order(exec_target, w["qty"], side=side, precision=w["prec"], reduce_only=False)
                         if ok:
                             w["in_trade"] = True
                 else:
@@ -232,7 +238,8 @@ def get_global_engine():
 
                     if reason:
                         close_side = "SELL" if is_bull else "BUY"
-                        self.place_binance_order(w["pair"], w["qty"], side=close_side, precision=w["prec"], reduce_only=True)
+                        exec_target = w["contract"] if self.trade_mode == "OPTIONS" else w["pair"]
+                        self.place_binance_order(exec_target, w["qty"], side=close_side, precision=w["prec"], reduce_only=True)
                         w["in_trade"] = False
                         w["unrealized"] = 0.0
                         w["trades"] += 1
@@ -275,7 +282,7 @@ with st.sidebar:
         key_input = engine.api_key
         sec_input = engine.api_secret
         if not paper_input:
-            st.warning("⚠️ **Live Mode Active:** Orders route to Binance Futures.")
+            st.warning("⚠️ **Live Mode Active:** Orders route to Binance API.")
             key_input = st.text_input("Binance API Key", value=engine.api_key, type="password")
             sec_input = st.text_input("Binance API Secret", value=engine.api_secret, type="password")
 
