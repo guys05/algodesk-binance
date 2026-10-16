@@ -43,21 +43,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH BALANCED NOTIONAL SIZING
+# 2. GLOBAL ENGINE WITH SCALABLE CAPITAL & POSITIVE R:R
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
     class SharedEngine:
         def __init__(self):
-            self.crypto_capital = 500.0
-            self.lot_size = 1.0
+            self.crypto_capital = 50000.0  # Default to user's $50k scale
+            self.lot_size = 5.0            # Scaled default for larger capital
             self.trade_mode = "OPTIONS"
             self.paper_trading = True
-            self.last_status = "Balanced Multi-Asset Engine Active (Fee & Notional Optimized)"
+            self.last_status = "High-Expectancy Multi-Asset Engine Active (Capital Scaled)"
             self.last_tick_time = 0.0
             self.trade_book = []
 
-            # Balanced base quantities (~$100-$150 notional per coin at 1.0x lot)
             self.workers = [
                 self.make_worker("BTC",  "BTCUSDT",  0.0015, 3, 500,  80800.0, "#3b82f6"),
                 self.make_worker("ETH",  "ETHUSDT",  0.05,   2, 25,   2350.0,  "#8b5cf6"),
@@ -81,7 +80,7 @@ def get_global_engine():
         def calc_pnl(self, entry, exit_p, qty, is_bull):
             diff = (exit_p - entry) if is_bull else (entry - exit_p)
             gross = diff * qty
-            fee = max(0.01, (entry + exit_p) * qty * 0.00045)
+            fee = max(0.02, (entry + exit_p) * qty * 0.00045)
             return round(gross, 2), round(fee, 2), round(gross - fee, 2)
 
         def fetch_prices(self):
@@ -103,6 +102,9 @@ def get_global_engine():
                 return
             self.last_tick_time = now
             live_map = self.fetch_prices()
+
+            # Dynamic capital scaling factor based on $500 baseline
+            capital_multiplier = max(1.0, self.crypto_capital / 500.0)
 
             for w in self.workers:
                 if w["pair"] in live_map:
@@ -140,8 +142,8 @@ def get_global_engine():
                         w["charge"] = max(25, w["charge"] - 6)
 
                     if w["charge"] >= 100:
-                        safe_lot = max(0.1, min(3.0, self.lot_size))
-                        w["qty"] = round(w["base_qty"] * safe_lot, w["prec"])
+                        effective_lot = max(0.2, self.lot_size)
+                        w["qty"] = round(w["base_qty"] * effective_lot * capital_multiplier, w["prec"])
                         w["id"] = f"BN-{random.randint(10000,99999)}"
                         st_step = w["strike_step"]
                         strike = int(round(spot/st_step)*st_step) if st_step >= 1 else round(round(spot/st_step)*st_step, 3)
@@ -161,25 +163,27 @@ def get_global_engine():
                     if net > w["peak_net"]:
                         w["peak_net"] = net
 
-                    min_lock = round(max(0.40 * self.lot_size, fee * 1.50), 2)
-                    trail_start = round(min_lock * 1.60, 2)
-                    target = round(min_lock * 2.60, 2)
-                    max_loss = -round(max(0.75 * self.lot_size, fee * 1.80), 2)
+                    # Scaled thresholds so wins significantly outweigh losses
+                    scale_factor = effective_lot = max(0.2, self.lot_size) * capital_multiplier
+                    min_lock = round(max(0.80 * scale_factor, fee * 1.6), 2)
+                    trail_start = round(min_lock * 1.8, 2)
+                    target = round(min_lock * 3.2, 2)
+                    max_loss = -round(max(0.60 * scale_factor, fee * 1.2), 2)
 
-                    if net >= (min_lock * 0.60):
+                    if net >= (min_lock * 0.50):
                         w["be_armed"] = True
 
                     reason = None
                     if net >= target:
                         reason = "🎯 Target Hit"
-                    elif w["peak_net"] >= trail_start and net >= min_lock and net <= (w["peak_net"] * 0.82):
+                    elif w["peak_net"] >= trail_start and net >= min_lock and net <= (w["peak_net"] * 0.85):
                         reason = "🏄 Profit Trailed"
-                    elif w["peak_net"] >= (min_lock * 1.2) and net >= min_lock and net <= (w["peak_net"] * 0.88):
+                    elif w["peak_net"] >= (min_lock * 1.3) and net >= min_lock and net <= (w["peak_net"] * 0.90):
                         reason = "🔒 Profit Locked"
-                    elif w["be_armed"] and net <= max(0.08, min_lock * 0.20):
+                    elif w["be_armed"] and net <= max(0.15, min_lock * 0.15):
                         reason = "🛡️ Break-Even Shield"
                     elif net <= max_loss:
-                        w["cooldown"] = 5
+                        w["cooldown"] = 4
                         reason = "🛑 Stop Loss"
 
                     if reason:
@@ -207,15 +211,15 @@ engine.step_all()
 is_client = st.query_params.get("client", "0") == "1"
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS
+# 3. SIDEBAR CONTROLS (UNLOCKED MULTIPLIER UP TO 50.0x)
 # ==============================================================================
 with st.sidebar:
     st.markdown("## ⚡ AlgoDesk SaaS")
-    st.caption("Optimized Binance Options & Perp Engine")
+    st.caption("High-Expectancy Binance Engine")
     if not is_client:
         st.subheader("⚙️ Admin Settings")
-        engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=50.0, value=float(engine.crypto_capital), step=50.0)
-        engine.lot_size = st.number_input("Lot Size Multiplier (Max 3.0)", min_value=0.2, max_value=3.0, value=float(engine.lot_size), step=0.2)
+        engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=500.0, value=float(engine.crypto_capital), step=1000.0)
+        engine.lot_size = st.number_input("Lot Size Multiplier (Up to 50.0x)", min_value=0.2, max_value=50.0, value=float(engine.lot_size), step=0.5)
         engine.trade_mode = st.selectbox("Contract Mode", ["OPTIONS", "FUTURES"], index=0 if engine.trade_mode=="OPTIONS" else 1)
         if st.button("🔄 Reset Day P&L", use_container_width=True):
             engine.trade_book.clear()
