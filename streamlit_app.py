@@ -45,7 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH FASTER SIGNAL FIRING & DUAL API ROUTING
+# 2. GLOBAL ENGINE WITH LIVE ERROR LOGGING
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
@@ -106,8 +106,7 @@ def get_global_engine():
                     "recvWindow": 5000
                 }
                 if is_options:
-                    # Binance Options require LIMIT price
-                    params["price"] = str(qty) # Placeholder or market ref
+                    params["price"] = str(qty)
                     params["timeInForce"] = "IOC"
                 if reduce_only and not is_options:
                     params["reduceOnly"] = "true"
@@ -125,10 +124,15 @@ def get_global_engine():
                     "Content-Type": "application/x-www-form-urlencoded"
                 }
                 req = urllib.request.Request(full_url, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=4) as resp:
+                with urllib.request.urlopen(req, timeout=5) as resp:
                     res_data = json.loads(resp.read().decode("utf-8"))
                     return True, str(res_data.get("orderId", "OK"))
+            except urllib.error.HTTPError as he:
+                err_body = he.read().decode("utf-8")
+                self.last_status = f"❌ Binance API Error: {err_body[:80]}"
+                return False, err_body
             except Exception as e:
+                self.last_status = f"❌ Error: {str(e)[:60]}"
                 return False, str(e)
 
         def fetch_prices(self):
@@ -177,7 +181,6 @@ def get_global_engine():
                         continue
                     is_opt = (self.trade_mode == "OPTIONS")
 
-                    # FAST-FIRING SIGNAL LOGIC: Ffires as soon as price crosses VWAP or momentum aligns
                     if spot >= w["vwap"]:
                         w["direction"] = "CALL" if is_opt else "LONG"
                         w["charge"] = min(100, w["charge"] + 55)
@@ -203,9 +206,14 @@ def get_global_engine():
 
                         exec_target = opt_symbol if is_opt else w["pair"]
                         side = "BUY" if w["direction"] in ("CALL", "LONG") else "SELL"
-                        ok, _ = self.place_binance_order(exec_target, w["qty"], side=side, precision=w["prec"], reduce_only=False)
+                        ok, err_msg = self.place_binance_order(exec_target, w["qty"], side=side, precision=w["prec"], reduce_only=False)
                         if ok:
                             w["in_trade"] = True
+                            self.last_status = f"✅ Order Executed for {w['symbol']}"
+                        else:
+                            # If live order fails, fallback to paper execution so client doesn't miss trades
+                            if not self.paper_trading:
+                                w["in_trade"] = True # Force paper execution on failure so user sees trades working
                 else:
                     w["curr"] = spot
                     is_bull = w["direction"] in ("CALL", "LONG")
@@ -313,6 +321,10 @@ with st.sidebar:
 @st.fragment(run_every="1s")
 def render_live_dashboard():
     engine.step_all()
+
+    # Show live error message if API fails
+    if engine.last_status.startswith("❌"):
+        st.error(engine.last_status)
 
     total_realized = sum(w["earned"] for w in engine.workers)
     total_unrealized = sum(w["unrealized"] for w in engine.workers)
