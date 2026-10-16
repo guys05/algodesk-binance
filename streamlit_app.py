@@ -11,19 +11,22 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="AlgoDesk • Binance Live Options & Futures Portfolio",
+    page_title="AlgoDesk • Binance Live Portfolio",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==============================================================================
-# 1. DARK SAAS STYLING
+# 1. DARK SAAS STYLING & SIDEBAR LABEL FIX
 # ==============================================================================
 st.markdown("""
 <style>
   .stApp { background-color: #161722; color: #f8fafc; }
   section[data-testid="stSidebar"] { background-color: #212332; border-right: 1px solid #34384b; }
+  /* Fix sidebar label visibility */
+  section[data-testid="stSidebar"] label { color: #fde047 !important; font-weight: 600 !important; font-size: 13px !important; }
+  section[data-testid="stSidebar"] .stCaption { color: #94a3b8 !important; }
   .saas-card {
       background: #212332; border: 1px solid #34384b; border-radius: 12px;
       padding: 16px; margin-bottom: 14px;
@@ -43,16 +46,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH LIVE BINANCE API EXECUTION
+# 2. GLOBAL ENGINE WITH $700 CAPITAL & LIVE FUTURES EXECUTION
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
     class SharedEngine:
         def __init__(self):
-            self.crypto_capital = 700.0  # Set to $700 live capital
-            self.lot_size = 1.0            # Reduced safe lot size for $700
+            self.crypto_capital = 700.0
+            self.lot_size = 1.0
             self.trade_mode = "OPTIONS"
-            self.paper_trading = True      # Toggle to False for Live Trading
+            self.paper_trading = True
             self.api_key = ""
             self.api_secret = ""
             self.last_status = "Live Ready ($700 Capital Configured)"
@@ -192,8 +195,10 @@ def get_global_engine():
                         w["be_armed"] = False
                         w["entry_time"] = datetime.datetime.now().strftime("%H:%M:%S")
 
+                        # Binance Live execution routes via USDⓈ-M Futures perpetual contracts
+                        exec_pair = w["pair"]
                         side = "BUY" if w["direction"] in ("CALL", "LONG") else "SELL"
-                        ok, _ = self.place_binance_order(w["pair"], w["qty"], side=side, precision=w["prec"], reduce_only=False)
+                        ok, _ = self.place_binance_order(exec_pair, w["qty"], side=side, precision=w["prec"], reduce_only=False)
                         if ok:
                             w["in_trade"] = True
                 else:
@@ -253,24 +258,38 @@ engine.step_all()
 is_client = st.query_params.get("client", "0") == "1"
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS (LIVE API CONFIGURATION)
+# 3. SIDEBAR CONTROLS WITH DEDICATED SAVE BUTTON
 # ==============================================================================
 with st.sidebar:
     st.markdown("## ⚡ AlgoDesk SaaS")
     st.caption("Live Binance Execution Engine")
     if not is_client:
         st.subheader("⚙️ Live & Capital Settings")
-        engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=50.0, value=float(engine.crypto_capital), step=50.0)
-        engine.lot_size = st.number_input("Lot Size Multiplier (Safe for $700 = 1.0x)", min_value=0.2, max_value=10.0, value=float(engine.lot_size), step=0.2)
-        engine.trade_mode = st.selectbox("Contract Mode", ["OPTIONS", "FUTURES"], index=0 if engine.trade_mode=="OPTIONS" else 1)
+        
+        # Use session state or direct form variables
+        cap_input = st.number_input("Active Capital ($ USDT)", min_value=50.0, value=float(engine.crypto_capital), step=50.0)
+        lot_input = st.number_input("Lot Size Multiplier (Safe for $700 = 1.0x)", min_value=0.2, max_value=20.0, value=float(engine.lot_size), step=0.2)
+        mode_input = st.selectbox("Contract Mode", ["OPTIONS", "FUTURES"], index=0 if engine.trade_mode=="OPTIONS" else 1)
         
         paper_choice = st.selectbox("Execution Mode", ["📝 Paper Trading (0 Risk)", "🚀 LIVE Binance API Execution"], index=0 if engine.paper_trading else 1)
-        engine.paper_trading = (paper_choice.startswith("📝"))
+        paper_input = paper_choice.startswith("📝")
 
-        if not engine.paper_trading:
-            st.warning("⚠️ **Live Mode Active:** Real orders will be sent to Binance Futures!")
-            engine.api_key = st.text_input("Binance API Key", value=engine.api_key, type="password")
-            engine.api_secret = st.text_input("Binance API Secret", value=engine.api_secret, type="password")
+        key_input = engine.api_key
+        sec_input = engine.api_secret
+        if not paper_input:
+            st.warning("⚠️ **Live Mode Active:** Orders route to Binance Futures.")
+            key_input = st.text_input("Binance API Key", value=engine.api_key, type="password")
+            sec_input = st.text_input("Binance API Secret", value=engine.api_secret, type="password")
+
+        # Explicit Save Button
+        if st.button("💾 Save API Keys & Settings", use_container_width=True, type="primary"):
+            engine.crypto_capital = cap_input
+            engine.lot_size = lot_input
+            engine.trade_mode = mode_input
+            engine.paper_trading = paper_input
+            engine.api_key = key_input
+            engine.api_secret = sec_input
+            st.success("✅ Settings & API Keys Saved Successfully!")
 
         if st.button("🔄 Reset Day P&L", use_container_width=True):
             engine.trade_book.clear()
