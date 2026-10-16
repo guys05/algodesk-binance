@@ -24,7 +24,6 @@ st.markdown("""
 <style>
   .stApp { background-color: #161722; color: #f8fafc; }
   section[data-testid="stSidebar"] { background-color: #212332; border-right: 1px solid #34384b; }
-  /* Fix sidebar label visibility */
   section[data-testid="stSidebar"] label { color: #fde047 !important; font-weight: 600 !important; font-size: 13px !important; }
   section[data-testid="stSidebar"] .stCaption { color: #94a3b8 !important; }
   .saas-card {
@@ -46,7 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. GLOBAL ENGINE WITH $700 CAPITAL & LIVE FUTURES EXECUTION
+# 2. GLOBAL ENGINE WITH $700 CAPITAL & FAST EXECUTION
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
@@ -172,14 +171,15 @@ def get_global_engine():
                     ema_bull = w["ema_f"] >= w["ema_s"]
                     is_opt = (self.trade_mode == "OPTIONS")
 
-                    if spot >= w["vwap"] and ema_bull and vel > 0:
+                    # Relaxed charge logic so signals cross 100% faster
+                    if spot >= w["vwap"] and ema_bull:
                         w["direction"] = "CALL" if is_opt else "LONG"
-                        w["charge"] = min(100, w["charge"] + 30)
-                    elif spot < w["vwap"] and (not ema_bull) and vel < 0:
+                        w["charge"] = min(100, w["charge"] + 45)
+                    elif spot < w["vwap"] and (not ema_bull):
                         w["direction"] = "PUT" if is_opt else "SHORT"
-                        w["charge"] = min(100, w["charge"] + 30)
+                        w["charge"] = min(100, w["charge"] + 45)
                     else:
-                        w["charge"] = max(25, w["charge"] - 6)
+                        w["charge"] = max(25, w["charge"] - 5)
 
                     if w["charge"] >= 100:
                         effective_lot = max(0.2, self.lot_size)
@@ -195,7 +195,6 @@ def get_global_engine():
                         w["be_armed"] = False
                         w["entry_time"] = datetime.datetime.now().strftime("%H:%M:%S")
 
-                        # Binance Live execution routes via USDⓈ-M Futures perpetual contracts
                         exec_pair = w["pair"]
                         side = "BUY" if w["direction"] in ("CALL", "LONG") else "SELL"
                         ok, _ = self.place_binance_order(exec_pair, w["qty"], side=side, precision=w["prec"], reduce_only=False)
@@ -258,7 +257,7 @@ engine.step_all()
 is_client = st.query_params.get("client", "0") == "1"
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS WITH DEDICATED SAVE BUTTON
+# 3. SIDEBAR CONTROLS WITH SAVE BUTTON
 # ==============================================================================
 with st.sidebar:
     st.markdown("## ⚡ AlgoDesk SaaS")
@@ -266,7 +265,6 @@ with st.sidebar:
     if not is_client:
         st.subheader("⚙️ Live & Capital Settings")
         
-        # Use session state or direct form variables
         cap_input = st.number_input("Active Capital ($ USDT)", min_value=50.0, value=float(engine.crypto_capital), step=50.0)
         lot_input = st.number_input("Lot Size Multiplier (Safe for $700 = 1.0x)", min_value=0.2, max_value=20.0, value=float(engine.lot_size), step=0.2)
         mode_input = st.selectbox("Contract Mode", ["OPTIONS", "FUTURES"], index=0 if engine.trade_mode=="OPTIONS" else 1)
@@ -281,7 +279,6 @@ with st.sidebar:
             key_input = st.text_input("Binance API Key", value=engine.api_key, type="password")
             sec_input = st.text_input("Binance API Secret", value=engine.api_secret, type="password")
 
-        # Explicit Save Button
         if st.button("💾 Save API Keys & Settings", use_container_width=True, type="primary"):
             engine.crypto_capital = cap_input
             engine.lot_size = lot_input
