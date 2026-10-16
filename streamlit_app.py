@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# 1. CUSTOM DARK SAAS CSS (MATCHING YOUR REFERENCE DASHBOARD)
+# 1. DARK SAAS STYLING
 # ==============================================================================
 st.markdown("""
 <style>
@@ -43,7 +43,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. SHARED GLOBAL ENGINE (RUNS ACROSS ALL CLIENT BROWSER TABS)
+# 2. GLOBAL ENGINE WITH BALANCED NOTIONAL SIZING
 # ==============================================================================
 @st.cache_resource
 def get_global_engine():
@@ -51,21 +51,20 @@ def get_global_engine():
         def __init__(self):
             self.crypto_capital = 500.0
             self.lot_size = 1.0
-            self.trade_mode = "OPTIONS"  # "OPTIONS" or "FUTURES"
+            self.trade_mode = "OPTIONS"
             self.paper_trading = True
-            self.api_key = ""
-            self.api_secret = ""
-            self.last_status = "Multi-Asset Engine Active (BTC, ETH, BNB, SOL, XRP, DOGE)"
+            self.last_status = "Balanced Multi-Asset Engine Active (Fee & Notional Optimized)"
             self.last_tick_time = 0.0
             self.trade_book = []
 
+            # Balanced base quantities (~$100-$150 notional per coin at 1.0x lot)
             self.workers = [
-                self.make_worker("BTC",  "BTCUSDT",  0.02,   3, 500,  80800.0, "#3b82f6"),
-                self.make_worker("ETH",  "ETHUSDT",  0.25,   2, 25,   2350.0,  "#8b5cf6"),
-                self.make_worker("BNB",  "BNBUSDT",  1.0,    2, 10,   610.0,   "#eab308"),
-                self.make_worker("SOL",  "SOLUSDT",  4.0,    1, 5,    175.0,   "#10b981"),
-                self.make_worker("XRP",  "XRPUSDT",  300.0,  1, 0.05, 2.15,    "#06b6d4"),
-                self.make_worker("DOGE", "DOGEUSDT", 2500.0, 0, 0.01, 0.185,   "#f97316"),
+                self.make_worker("BTC",  "BTCUSDT",  0.0015, 3, 500,  80800.0, "#3b82f6"),
+                self.make_worker("ETH",  "ETHUSDT",  0.05,   2, 25,   2350.0,  "#8b5cf6"),
+                self.make_worker("BNB",  "BNBUSDT",  0.2,    2, 10,   610.0,   "#eab308"),
+                self.make_worker("SOL",  "SOLUSDT",  0.7,    1, 5,    175.0,   "#10b981"),
+                self.make_worker("XRP",  "XRPUSDT",  60.0,   1, 0.05, 2.15,    "#06b6d4"),
+                self.make_worker("DOGE", "DOGEUSDT", 650.0,  0, 0.01, 0.185,   "#f97316"),
             ]
 
         def make_worker(self, sym, pair, base_qty, prec, strike_step, spot, color):
@@ -82,7 +81,7 @@ def get_global_engine():
         def calc_pnl(self, entry, exit_p, qty, is_bull):
             diff = (exit_p - entry) if is_bull else (entry - exit_p)
             gross = diff * qty
-            fee = max(0.02, (entry + exit_p) * qty * 0.00045)
+            fee = max(0.01, (entry + exit_p) * qty * 0.00045)
             return round(gross, 2), round(fee, 2), round(gross - fee, 2)
 
         def fetch_prices(self):
@@ -109,7 +108,6 @@ def get_global_engine():
                 if w["pair"] in live_map:
                     spot = live_map[w["pair"]]
                 else:
-                    # Fallback micro-drift if cloud IP is rate-limited by Binance
                     spot = round(w["spot"] * (1.0 + random.uniform(-0.0007, 0.00075)), 4)
 
                 w["spot"] = spot
@@ -142,7 +140,8 @@ def get_global_engine():
                         w["charge"] = max(25, w["charge"] - 6)
 
                     if w["charge"] >= 100:
-                        w["qty"] = round(w["base_qty"] * self.lot_size, w["prec"])
+                        safe_lot = max(0.1, min(3.0, self.lot_size))
+                        w["qty"] = round(w["base_qty"] * safe_lot, w["prec"])
                         w["id"] = f"BN-{random.randint(10000,99999)}"
                         st_step = w["strike_step"]
                         strike = int(round(spot/st_step)*st_step) if st_step >= 1 else round(round(spot/st_step)*st_step, 3)
@@ -162,12 +161,12 @@ def get_global_engine():
                     if net > w["peak_net"]:
                         w["peak_net"] = net
 
-                    min_lock = round(max(0.65 * self.lot_size, fee * 1.45), 2)
-                    trail_start = round(min_lock * 1.55, 2)
-                    target = round(min_lock * 2.50, 2)
-                    max_loss = -round(max(1.05 * self.lot_size, fee * 1.75), 2)
+                    min_lock = round(max(0.40 * self.lot_size, fee * 1.50), 2)
+                    trail_start = round(min_lock * 1.60, 2)
+                    target = round(min_lock * 2.60, 2)
+                    max_loss = -round(max(0.75 * self.lot_size, fee * 1.80), 2)
 
-                    if net >= (min_lock * 0.65):
+                    if net >= (min_lock * 0.60):
                         w["be_armed"] = True
 
                     reason = None
@@ -177,7 +176,7 @@ def get_global_engine():
                         reason = "🏄 Profit Trailed"
                     elif w["peak_net"] >= (min_lock * 1.2) and net >= min_lock and net <= (w["peak_net"] * 0.88):
                         reason = "🔒 Profit Locked"
-                    elif w["be_armed"] and net <= max(0.10, min_lock * 0.20):
+                    elif w["be_armed"] and net <= max(0.08, min_lock * 0.20):
                         reason = "🛡️ Break-Even Shield"
                     elif net <= max_loss:
                         w["cooldown"] = 5
@@ -205,19 +204,18 @@ def get_global_engine():
 engine = get_global_engine()
 engine.step_all()
 
-# Check if opened in Client Read-Only Mode (?client=1)
 is_client = st.query_params.get("client", "0") == "1"
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS (HIDDEN IN CLIENT SHARE MODE)
+# 3. SIDEBAR CONTROLS
 # ==============================================================================
 with st.sidebar:
     st.markdown("## ⚡ AlgoDesk SaaS")
-    st.caption("6-Pair Binance Options & Perp Engine")
+    st.caption("Optimized Binance Options & Perp Engine")
     if not is_client:
         st.subheader("⚙️ Admin Settings")
         engine.crypto_capital = st.number_input("Active Capital ($ USDT)", min_value=50.0, value=float(engine.crypto_capital), step=50.0)
-        engine.lot_size = st.number_input("Lot Size Multiplier", min_value=0.2, max_value=20.0, value=float(engine.lot_size), step=0.5)
+        engine.lot_size = st.number_input("Lot Size Multiplier (Max 3.0)", min_value=0.2, max_value=3.0, value=float(engine.lot_size), step=0.2)
         engine.trade_mode = st.selectbox("Contract Mode", ["OPTIONS", "FUTURES"], index=0 if engine.trade_mode=="OPTIONS" else 1)
         if st.button("🔄 Reset Day P&L", use_container_width=True):
             engine.trade_book.clear()
@@ -225,14 +223,14 @@ with st.sidebar:
                 w["in_trade"] = False; w["trades"] = 0; w["wins"] = 0; w["earned"] = 0.0; w["unrealized"] = 0.0
             st.rerun()
         st.divider()
-        st.info("💡 **Client Link Tip:** Append `?client=1` to your Streamlit URL before sharing with clients to hide these settings.")
+        st.info("💡 **Client Link Tip:** Append `?client=1` to your URL to share a clean Read-Only Investor View.")
     else:
         st.success("🔒 **Investor Read-Only Live View**")
         st.write(f"**Active Capital:** ${engine.crypto_capital:,.2f}")
         st.write(f"**Strategy Mode:** Binance {engine.trade_mode}")
 
 # ==============================================================================
-# 4. MAIN DASHBOARD RENDER (AUTO-UPDATES EVERY 1 SECOND)
+# 4. DASHBOARD UI
 # ==============================================================================
 @st.fragment(run_every="1s")
 def render_live_dashboard():
@@ -247,11 +245,10 @@ def render_live_dashboard():
     roi_pct = (net_total / engine.crypto_capital) * 100 if engine.crypto_capital else 0
     win_rate = round((total_wins / total_trades) * 100) if total_trades > 0 else 0
 
-    # Top KPI Row
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.markdown(f'<div class="saas-card"><div class="kpi-title">Active Capital</div><div class="kpi-value">${engine.crypto_capital:,.2f}</div><div class="kpi-sub">Binance USDⓈ-M / Options</div></div>', unsafe_allow_html=True)
     r_col = "#10b981" if total_realized >= 0 else "#ef4444"
-    k2.markdown(f'<div class="saas-card"><div class="kpi-title">Net Realized P&L</div><div class="kpi-value" style="color:{r_col};">{total_realized:+.2f}$</div><div class="kpi-sub">After 0.045% Taker Fees</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="saas-card"><div class="kpi-title">Net Realized P&L</div><div class="kpi-value" style="color:{r_col};">{total_realized:+.2f}$</div><div class="kpi-sub">After Taker Fees</div></div>', unsafe_allow_html=True)
     u_col = "#f59e0b" if total_unrealized >= 0 else "#ef4444"
     k3.markdown(f'<div class="saas-card"><div class="kpi-title">Open Unrealized</div><div class="kpi-value" style="color:{u_col};">{total_unrealized:+.2f}$</div><div class="kpi-sub">{open_count} Active Contracts</div></div>', unsafe_allow_html=True)
     k4.markdown(f'<div class="saas-card"><div class="kpi-title">Total Net ROI %</div><div class="kpi-value" style="color:{r_col};">{roi_pct:+.2f}%</div><div class="kpi-sub">Realized + Open</div></div>', unsafe_allow_html=True)
@@ -300,7 +297,7 @@ def render_live_dashboard():
         else:
             st.caption("Scanning 6 crypto pairs for EMA + VWAP momentum alignment...")
 
-        st.markdown("##### 📑 Completed Trades Today (All Fees Deducted)")
+        st.markdown("##### 📑 Completed Trades Today")
         if engine.trade_book:
             df_book = pd.DataFrame(engine.trade_book[:30])
             st.dataframe(df_book, use_container_width=True, hide_index=True)
